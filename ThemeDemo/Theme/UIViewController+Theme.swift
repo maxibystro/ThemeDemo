@@ -29,10 +29,10 @@ extension UIViewController: ThemeEnvironment {
         }
     }
     
-    private class Context {
+    private final class Context {
         
         var state: State = .uninitialized
-        var parentObservation: NSKeyValueObservation?
+        var observations = [NSKeyValueObservation]()
     }
     
     private var themeEnvironmentContext: Context {
@@ -48,9 +48,16 @@ extension UIViewController: ThemeEnvironment {
         return LightTheme.theme
     }
     
+    private var predecessor: UIViewController? {
+        if let _ = parent {
+            return parent
+        }
+        return presentingViewController
+    }
+    
     var theme: Theme {
         ensureThemeIsInitialized()
-        ensureParentObservationExists()
+        ensureObservationsAreConfigured()
         return themeEnvironmentContext.state.theme!
     }
     
@@ -64,16 +71,21 @@ extension UIViewController: ThemeEnvironment {
         }
     }
     
-    private func ensureParentObservationExists() {
-        if let _ = themeEnvironmentContext.parentObservation {
-            return
-        }
-        themeEnvironmentContext.parentObservation = observe(
+    private func ensureObservationsAreConfigured() {
+        guard themeEnvironmentContext.observations.isEmpty else { return }
+        let parentObservation = observe(
             \.parent,
             options: [.new]
         ) { [weak self] _, _ in
-            self?.parentDidChangeTheme()
+            self?.predecessorDidChangeTheme()
         }
+        let presentingControllerObservation = observe(
+            \.presentingViewController,
+            options: [.new]
+        ) { [weak self] _, _ in
+            self?.predecessorDidChangeTheme()
+        }
+        themeEnvironmentContext.observations = [parentObservation, presentingControllerObservation]
     }
     
     private func ensureThemeIsInitialized() {
@@ -83,10 +95,14 @@ extension UIViewController: ThemeEnvironment {
     }
     
     private func inheritedTheme() -> Theme {
-        guard let parent = parent else {
+        guard let predecessor = predecessor else {
             return defaultTheme
         }
-        return parent.theme
+        return predecessor.theme
+    }
+    
+    private func inheritedState() -> State {
+        return .inherited(inheritedTheme())
     }
     
     @discardableResult private func setState(_ state: State) -> Bool {
@@ -103,17 +119,14 @@ extension UIViewController: ThemeEnvironment {
         }
     }
     
-    private func inheritedState() -> State {
-        return .inherited(inheritedTheme())
-    }
-    
     private func notifyThemeDidChange() {
         themeDidChange()
-        children.forEach({ $0.parentDidChangeTheme() })
+        children.forEach({ $0.predecessorDidChangeTheme() })
+        presentedViewController?.predecessorDidChangeTheme()
     }
     
-    private func parentDidChangeTheme() {
-        guard let _ = parent else { return }
+    private func predecessorDidChangeTheme() {
+        guard let _ = predecessor else { return }
         switch themeEnvironmentContext.state {
         case .uninitialized:
             fallthrough
